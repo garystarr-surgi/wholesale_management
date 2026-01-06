@@ -78,21 +78,20 @@ def get_wholesale_availability(months_lookback=3, months_par=6, buffer_percent=1
             buffer_percent=buffer_percent
         )
         
-        # Only include items with wholesale quantity available
-        if wholesale_qty > 0:
-            results.append({
-                'brand': item.brand or '',
-                'item_code': item.item_code,
-                'item_name': item.item_name,
-                'item_group': item.item_group or '',
-                'wholesale_qty': round(wholesale_qty, 0),
-                'last_offer_price': item.last_offer_price or 'MO',
-                'qty_available': item.qty_available,
-                'on_hold': on_hold,
-                'par_level': round(par_level, 2),
-                'par_months': months_par,
-                'buffer_percent': buffer_percent
-            })
+        # Include ALL items with inventory, even if wholesale_qty is 0 or negative
+        results.append({
+            'brand': item.brand or '',
+            'item_code': item.item_code,
+            'item_name': item.item_name,
+            'item_group': item.item_group or '',
+            'wholesale_qty': round(wholesale_qty, 0),  # Can be 0 or negative
+            'last_offer_price': item.last_offer_price or 'MO',
+            'qty_available': item.qty_available,
+            'on_hold': on_hold,
+            'par_level': round(par_level, 2),
+            'par_months': months_par,
+            'buffer_percent': buffer_percent
+        })
     
     frappe.response['message'] = {
         'data': results,
