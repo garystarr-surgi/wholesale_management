@@ -5,10 +5,10 @@ from frappe import _
 from datetime import datetime, timedelta
 
 @frappe.whitelist()
-def get_wholesale_availability(months_lookback=3, months_par=6, buffer_percent=10):
+def get_wholesale_availability(months_lookback=3, months_par=6, buffer_percent=10, warehouse="Stores - SURGI"):
     """
     Calculate wholesale availability for all items based on:
-    - Current inventory
+    - Current inventory in specified warehouse only
     - On hold quantities (SO + Quotations)
     - Par level (average monthly sales * months_par + buffer)
     
@@ -16,6 +16,7 @@ def get_wholesale_availability(months_lookback=3, months_par=6, buffer_percent=1
         months_lookback (int): Number of months to calculate average sales (default: 3)
         months_par (int): Number of months of par to maintain (default: 6)
         buffer_percent (int): Additional buffer percentage (default: 10)
+        warehouse (str): Warehouse to check inventory (default: 'Stores - SURGI')
     
     Returns:
         list: Wholesale offer data for all eligible items
@@ -35,7 +36,7 @@ def get_wholesale_availability(months_lookback=3, months_par=6, buffer_percent=1
     # Get date range for average calculation
     lookback_date = (datetime.now() - timedelta(days=months_lookback * 30)).strftime('%Y-%m-%d')
     
-    # Main query to get items with inventory
+    # Main query - FILTER BY SPECIFIED WAREHOUSE ONLY
     query = """
         SELECT 
             i.name as item_code,
@@ -45,15 +46,16 @@ def get_wholesale_availability(months_lookback=3, months_par=6, buffer_percent=1
             i.custom_wholesale_offer_price as last_offer_price,
             COALESCE(SUM(bin.actual_qty), 0) as qty_available
         FROM `tabItem` i
-        LEFT JOIN `tabBin` bin ON bin.item_code = i.name
+        INNER JOIN `tabBin` bin ON bin.item_code = i.name
         WHERE i.disabled = 0
         AND i.is_stock_item = 1
+        AND bin.warehouse = %s
         GROUP BY i.name
         HAVING qty_available > 0
         ORDER BY i.brand, i.item_name
     """
     
-    items = frappe.db.sql(query, as_dict=True)
+    items = frappe.db.sql(query, (warehouse,), as_dict=True)
     
     results = []
     
@@ -96,6 +98,7 @@ def get_wholesale_availability(months_lookback=3, months_par=6, buffer_percent=1
         'data': results,
         'summary': {
             'total_items': len(results),
+            'warehouse': warehouse,
             'generated_at': datetime.now().isoformat(),
             'parameters': {
                 'months_lookback': months_lookback,
@@ -150,4 +153,98 @@ def update_offer_prices(items_data):
         'success': True,
         'updated_count': updated_count,
         'errors': errors
+    }
+
+
+@frappe.whitelist()
+def get_available_warehouses():
+    """
+    Get list of all active warehouses
+    Useful for dropdown/selection in Google Sheets or UI
+    
+    Returns:
+        list: Active warehouse names
+    """
+    
+    query = """
+        SELECT name, warehouse_name
+        FROM `tabWarehouse`
+        WHERE disabled = 0
+        ORDER BY name
+    """
+    
+    warehouses = frappe.db.sql(query, as_dict=True)
+    
+    return {
+        'warehouses': warehouses,
+        'count': len(warehouses)
+    }
+
+
+@frappe.whitelist()
+def get_item_wholesale_detail(item_code, warehouse="Stores - SURGI"):
+    """
+    Get detailed wholesale calculation for a single item
+    Useful for debugging or detailed view
+    
+    Args:
+        item_code (str): Item code to analyze
+        warehouse (str): Warehouse to check
+    
+    Returns:
+        dict: Detailed breakdown of wholesale calculation
+    """
+    
+    from wholesale_management.utils.calculations import (
+        calculate_par_level,
+        calculate_on_hold_qty,
+        get_item_sales_history
+    )
+    
+    # Get item info
+    item = frappe.get_doc('Item', item_code)
+    
+    # Get inventory in specified warehouse
+    bin_data = frappe.db.get_value(
+        'Bin',
+        {'item_code': item_code, 'warehouse': warehouse},
+        ['actual_qty', 'reserved_qty', 'ordered_qty', 'planned_qty'],
+        as_dict=True
+    )
+    
+    qty_available = bin_data.actual_qty if bin_data else 0
+    
+    # Calculate metrics
+    lookback_date = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
+    par_level = calculate_par_level(item_code, lookback_date)
+    on_hold = calculate_on_hold_qty(item_code)
+    sales_history = get_item_sales_history(item_code, months=12)
+    
+    # Calculate wholesale qty
+    months_par = 6
+    buffer_percent = 10
+    par_with_buffer = (par_level * months_par) * (1 + buffer_percent / 100)
+    wholesale_qty = max(0, qty_available - on_hold - par_with_buffer)
+    
+    return {
+        'item_code': item_code,
+        'item_name': item.item_name,
+        'brand': item.brand,
+        'warehouse': warehouse,
+        'inventory': {
+            'actual_qty': qty_available,
+            'reserved_qty': bin_data.reserved_qty if bin_data else 0,
+            'ordered_qty': bin_data.ordered_qty if bin_data else 0,
+        },
+        'calculations': {
+            'par_level_monthly': round(par_level, 2),
+            'par_months': months_par,
+            'par_total': round(par_level * months_par, 2),
+            'buffer_percent': buffer_percent,
+            'par_with_buffer': round(par_with_buffer, 2),
+            'on_hold': on_hold,
+            'wholesale_available': round(wholesale_qty, 0)
+        },
+        'sales_history': sales_history,
+        'last_offer_price': item.custom_wholesale_offer_price
     }
