@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wholesale_management"
+version = "0.0.1"
+description = "wholesale management"
+authors = [
+  { name="SurgiShop", email="gary.starr@surgishop.com" }
+]
+dependencies = [
+  "frappe>=15"
+]
+readme = "README.md"
+license = { text = "MIT" }
