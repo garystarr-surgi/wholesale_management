@@ -103,33 +103,50 @@ def calculate_wholesale_qty(qty_available, on_hold, par_level, months_par=6, buf
     return max(0, wholesale_qty)
 
 
-def calculate_avg_sale_price(item_code, lookback_date):
+def calculate_avg_sale_price(item_code, lookback_date, warehouse=None):
     """
     Calculate average sales price PER UNIT (before taxes) for an item over specified period
+    Optionally filtered by warehouse
     Uses base_amount which is the price before taxes
     
     Args:
         item_code (str): Item code
         lookback_date (str): Start date for calculation (YYYY-MM-DD)
+        warehouse (str): Optional warehouse filter
     
     Returns:
         float: Average sale price per unit before taxes
     """
     
-    query = """
-        SELECT 
-            COALESCE(SUM(sii.base_amount), 0) as total_amount,
-            COALESCE(SUM(sii.qty), 0) as total_qty
-        FROM `tabSales Invoice Item` sii
-        JOIN `tabSales Invoice` si ON sii.parent = si.name
-        WHERE sii.item_code = %s
-        AND si.docstatus = 1
-        AND si.posting_date >= %s
-        AND si.is_return = 0
-        AND sii.qty > 0
-    """
-    
-    result = frappe.db.sql(query, (item_code, lookback_date), as_dict=True)
+    if warehouse:
+        query = """
+            SELECT 
+                COALESCE(SUM(sii.base_amount), 0) as total_amount,
+                COALESCE(SUM(sii.qty), 0) as total_qty
+            FROM `tabSales Invoice Item` sii
+            JOIN `tabSales Invoice` si ON sii.parent = si.name
+            WHERE sii.item_code = %s
+            AND si.docstatus = 1
+            AND si.posting_date >= %s
+            AND si.is_return = 0
+            AND sii.qty > 0
+            AND sii.warehouse = %s
+        """
+        result = frappe.db.sql(query, (item_code, lookback_date, warehouse), as_dict=True)
+    else:
+        query = """
+            SELECT 
+                COALESCE(SUM(sii.base_amount), 0) as total_amount,
+                COALESCE(SUM(sii.qty), 0) as total_qty
+            FROM `tabSales Invoice Item` sii
+            JOIN `tabSales Invoice` si ON sii.parent = si.name
+            WHERE sii.item_code = %s
+            AND si.docstatus = 1
+            AND si.posting_date >= %s
+            AND si.is_return = 0
+            AND sii.qty > 0
+        """
+        result = frappe.db.sql(query, (item_code, lookback_date), as_dict=True)
     
     if result and result[0].total_qty > 0:
         # Calculate per-unit price: total amount / total quantity
@@ -138,29 +155,43 @@ def calculate_avg_sale_price(item_code, lookback_date):
     return 0
 
 
-def get_last_purchase_price(item_code):
+def get_last_purchase_price(item_code, warehouse=None):
     """
     Get the last purchase price PER UNIT from most recent Purchase Receipt
+    Optionally filtered by warehouse
     Uses rate which is the per-unit cost
     
     Args:
         item_code (str): Item code
+        warehouse (str): Optional warehouse filter
     
     Returns:
         float: Last purchase price per unit
     """
     
-    query = """
-        SELECT pri.rate as unit_cost
-        FROM `tabPurchase Receipt Item` pri
-        JOIN `tabPurchase Receipt` pr ON pri.parent = pr.name
-        WHERE pri.item_code = %s
-        AND pr.docstatus = 1
-        ORDER BY pr.posting_date DESC, pr.creation DESC
-        LIMIT 1
-    """
-    
-    result = frappe.db.sql(query, (item_code,), as_dict=True)
+    if warehouse:
+        query = """
+            SELECT pri.rate as unit_cost
+            FROM `tabPurchase Receipt Item` pri
+            JOIN `tabPurchase Receipt` pr ON pri.parent = pr.name
+            WHERE pri.item_code = %s
+            AND pr.docstatus = 1
+            AND pri.warehouse = %s
+            ORDER BY pr.posting_date DESC, pr.creation DESC
+            LIMIT 1
+        """
+        result = frappe.db.sql(query, (item_code, warehouse), as_dict=True)
+    else:
+        query = """
+            SELECT pri.rate as unit_cost
+            FROM `tabPurchase Receipt Item` pri
+            JOIN `tabPurchase Receipt` pr ON pri.parent = pr.name
+            WHERE pri.item_code = %s
+            AND pr.docstatus = 1
+            ORDER BY pr.posting_date DESC, pr.creation DESC
+            LIMIT 1
+        """
+        result = frappe.db.sql(query, (item_code,), as_dict=True)
     
     if result:
         return result[0].unit_cost
