@@ -25,7 +25,9 @@ def get_wholesale_availability(months_lookback=3, months_par=6, buffer_percent=1
     from wholesale_management.utils.calculations import (
         calculate_par_level,
         calculate_on_hold_qty,
-        calculate_wholesale_qty
+        calculate_wholesale_qty,
+        calculate_avg_sale_price,
+        get_last_purchase_price
     )
     
     # Validate parameters
@@ -60,7 +62,7 @@ def get_wholesale_availability(months_lookback=3, months_par=6, buffer_percent=1
     results = []
     
     for item in items:
-        # Calculate par level (average monthly sales)
+        # Calculate par level (average monthly sales over 3 months)
         par_level = calculate_par_level(
             item_code=item.item_code,
             lookback_date=lookback_date
@@ -78,6 +80,15 @@ def get_wholesale_availability(months_lookback=3, months_par=6, buffer_percent=1
             buffer_percent=buffer_percent
         )
         
+        # Calculate average sale price over last 3 months
+        avg_sale_price = calculate_avg_sale_price(
+            item_code=item.item_code,
+            lookback_date=lookback_date
+        )
+        
+        # Get last purchase price
+        cost = get_last_purchase_price(item_code=item.item_code)
+        
         # Include ALL items with inventory, even if wholesale_qty is 0 or negative
         results.append({
             'brand': item.brand or '',
@@ -88,7 +99,10 @@ def get_wholesale_availability(months_lookback=3, months_par=6, buffer_percent=1
             'last_offer_price': item.last_offer_price or 'MO',
             'qty_available': item.qty_available,
             'on_hold': on_hold,
-            'par_level': round(par_level, 2),
+            'par_level': round(par_level, 2),  # 3 month average
+            'avg_sale_price': round(avg_sale_price, 2),
+            'lowest_offer': None,  # Placeholder for future calculation
+            'cost': round(cost, 2),
             'par_months': months_par,
             'buffer_percent': buffer_percent
         })
@@ -108,142 +122,3 @@ def get_wholesale_availability(months_lookback=3, months_par=6, buffer_percent=1
     }
     
     return frappe.response['message']
-
-
-@frappe.whitelist()
-def update_offer_prices(items_data):
-    """
-    Update custom_wholesale_offer_price for multiple items
-    
-    Args:
-        items_data (str): JSON string of list with [{item_code: '', offer_price: ''}]
-    
-    Returns:
-        dict: Success status and count
-    """
-    import json
-    
-    if isinstance(items_data, str):
-        items_data = json.loads(items_data)
-    
-    updated_count = 0
-    errors = []
-    
-    for item in items_data:
-        try:
-            item_code = item.get('item_code')
-            offer_price = item.get('offer_price')
-            
-            if not item_code:
-                continue
-                
-            frappe.db.set_value('Item', item_code, 'custom_wholesale_offer_price', offer_price)
-            updated_count += 1
-            
-        except Exception as e:
-            errors.append({
-                'item_code': item_code,
-                'error': str(e)
-            })
-    
-    frappe.db.commit()
-    
-    return {
-        'success': True,
-        'updated_count': updated_count,
-        'errors': errors
-    }
-
-
-@frappe.whitelist()
-def get_available_warehouses():
-    """
-    Get list of all active warehouses
-    Useful for dropdown/selection in Google Sheets or UI
-    
-    Returns:
-        list: Active warehouse names
-    """
-    
-    query = """
-        SELECT name, warehouse_name
-        FROM `tabWarehouse`
-        WHERE disabled = 0
-        ORDER BY name
-    """
-    
-    warehouses = frappe.db.sql(query, as_dict=True)
-    
-    return {
-        'warehouses': warehouses,
-        'count': len(warehouses)
-    }
-
-
-@frappe.whitelist()
-def get_item_wholesale_detail(item_code, warehouse="Stores - SURGI"):
-    """
-    Get detailed wholesale calculation for a single item
-    Useful for debugging or detailed view
-    
-    Args:
-        item_code (str): Item code to analyze
-        warehouse (str): Warehouse to check
-    
-    Returns:
-        dict: Detailed breakdown of wholesale calculation
-    """
-    
-    from wholesale_management.utils.calculations import (
-        calculate_par_level,
-        calculate_on_hold_qty,
-        get_item_sales_history
-    )
-    
-    # Get item info
-    item = frappe.get_doc('Item', item_code)
-    
-    # Get inventory in specified warehouse
-    bin_data = frappe.db.get_value(
-        'Bin',
-        {'item_code': item_code, 'warehouse': warehouse},
-        ['actual_qty', 'reserved_qty', 'ordered_qty', 'planned_qty'],
-        as_dict=True
-    )
-    
-    qty_available = bin_data.actual_qty if bin_data else 0
-    
-    # Calculate metrics
-    lookback_date = (datetime.now() - timedelta(days=90)).strftime('%Y-%m-%d')
-    par_level = calculate_par_level(item_code, lookback_date)
-    on_hold = calculate_on_hold_qty(item_code)
-    sales_history = get_item_sales_history(item_code, months=12)
-    
-    # Calculate wholesale qty
-    months_par = 6
-    buffer_percent = 10
-    par_with_buffer = (par_level * months_par) * (1 + buffer_percent / 100)
-    wholesale_qty = max(0, qty_available - on_hold - par_with_buffer)
-    
-    return {
-        'item_code': item_code,
-        'item_name': item.item_name,
-        'brand': item.brand,
-        'warehouse': warehouse,
-        'inventory': {
-            'actual_qty': qty_available,
-            'reserved_qty': bin_data.reserved_qty if bin_data else 0,
-            'ordered_qty': bin_data.ordered_qty if bin_data else 0,
-        },
-        'calculations': {
-            'par_level_monthly': round(par_level, 2),
-            'par_months': months_par,
-            'par_total': round(par_level * months_par, 2),
-            'buffer_percent': buffer_percent,
-            'par_with_buffer': round(par_with_buffer, 2),
-            'on_hold': on_hold,
-            'wholesale_available': round(wholesale_qty, 0)
-        },
-        'sales_history': sales_history,
-        'last_offer_price': item.custom_wholesale_offer_price
-    }
