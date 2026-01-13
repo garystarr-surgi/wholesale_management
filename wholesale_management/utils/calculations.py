@@ -135,3 +135,64 @@ def get_item_sales_history(item_code, months=12):
     """
     
     return frappe.db.sql(query, (item_code, start_date), as_dict=True)
+
+# Add this function to your calculations.py file
+
+def calculate_avg_sale_price(item_code, lookback_date):
+    """
+    Calculate average sales price for an item over specified period
+    
+    Args:
+        item_code (str): Item code
+        lookback_date (str): Start date for calculation (YYYY-MM-DD)
+    
+    Returns:
+        float: Average sale price
+    """
+    
+    query = """
+        SELECT 
+            COALESCE(AVG(sii.rate), 0) as avg_price,
+            COALESCE(SUM(sii.qty), 0) as total_qty
+        FROM `tabSales Invoice Item` sii
+        JOIN `tabSales Invoice` si ON sii.parent = si.name
+        WHERE sii.item_code = %s
+        AND si.docstatus = 1
+        AND si.posting_date >= %s
+        AND si.is_return = 0
+        AND sii.qty > 0
+    """
+    
+    result = frappe.db.sql(query, (item_code, lookback_date), as_dict=True)
+    
+    if result and result[0].total_qty > 0:
+        return result[0].avg_price
+    return 0
+
+
+def get_last_purchase_price(item_code):
+    """
+    Get the last purchase price from most recent Purchase Receipt
+    
+    Args:
+        item_code (str): Item code
+    
+    Returns:
+        float: Last purchase price
+    """
+    
+    query = """
+        SELECT pri.rate
+        FROM `tabPurchase Receipt Item` pri
+        JOIN `tabPurchase Receipt` pr ON pri.parent = pr.name
+        WHERE pri.item_code = %s
+        AND pr.docstatus = 1
+        ORDER BY pr.posting_date DESC, pr.creation DESC
+        LIMIT 1
+    """
+    
+    result = frappe.db.sql(query, (item_code,), as_dict=True)
+    
+    if result:
+        return result[0].rate
+    return 0
